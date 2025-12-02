@@ -5,11 +5,11 @@ from helper import(
 )
 
 from engines import(
-    engineR
+    engineR, engine
 )
 
-def self_play(engine1, engine2, record_states=True):
-
+def self_play(model1, model2, e1=0, e2=0, record_states=True, display=True):
+    from engines import engine
     board = create_board()
     current_player = 1
     ai_states = []
@@ -17,14 +17,26 @@ def self_play(engine1, engine2, record_states=True):
     while True:
         # Terminal check first to avoid calling moves on a full/finished board
         if check_win(board, 1):
-            print_board(board)
-            return 1, ai_states
+            if display:
+                print_board(board)
+            fixed = []
+            for _ in ai_states:
+                fixed.append(_ + (1,))
+            return 1, fixed
         if check_win(board, 2):
-            print_board(board)
-            return 2, ai_states
+            if display:
+                print_board(board)
+            fixed = []
+            for _ in ai_states:
+                fixed.append(_ + (2,))
+            return 2, fixed
         if is_draw(board):
-            print_board(board)
-            return None, ai_states
+            if display:
+                print_board(board)
+            fixed = []
+            for _ in ai_states:
+                fixed.append(_ + (0.5,))  # draw label
+            return None, fixed
 
         # Record state whenever it's our chosen AI player's turn
         if record_states:
@@ -35,23 +47,24 @@ def self_play(engine1, engine2, record_states=True):
             # Safety net: treat as draw
             return None, ai_states
         if current_player == 1:
-            col = engine1(board, current_player)
+            col = engine(board, current_player, model1, e1)
         else:
-            col = engine2(board, current_player)
+            col = engine(board, current_player, model2, e2)
         drop_piece(board, col, current_player)
 
         # Switch player
         current_player = 2 if current_player == 1 else 1
 
-def simulate(engine1, engine2, games=1):
+def simulate(model1, model2, games=1, e1=0, e2=0, display=True):
     win1 = 0
     win2 = 0
     draw = 0
     ai_states = []
     for _ in range(games):
-        result, states = self_play(engine1, engine2)
+        result, states = self_play(model1, model2, e1, e2, record_states=True, display=display)
         # print(len(states))
-        ai_states.append(states)
+        if states is not None:
+            ai_states += states
         if result == 1:
             win1 += 1
         elif result == 2:
@@ -60,7 +73,7 @@ def simulate(engine1, engine2, games=1):
             draw += 1
     print(win1, win2, draw)
     # print(ai_states)
-    return ai_states
-self_play(engineR, engineR)
+    return ai_states, win1, win2, draw
+# self_play(None, None)
 
-simulate(engineR, engineR, 1)
+# simulate(None, None, 1)

@@ -41,4 +41,42 @@ class SimpleNN:
         self.W1 -= lr * dW1
         self.b1 -= lr * db1
 
+    def save(self, path):
+        """
+        Save model weights to an .npz file.
+        """
+        np.savez(
+            path,
+            W1=self.W1,
+            b1=self.b1,
+            W2=self.W2,
+            b2=self.b2,
+        )
+
+    @staticmethod
+    def load(path):
+        """
+        Load model weights from an .npz file and return a new SimpleNN.
+        """
+        data = np.load(path)
+        W1 = data["W1"]
+        b1 = data["b1"]
+        W2 = data["W2"]
+        b2 = data["b2"]
+
+        hidden = W1.shape[0]
+        model = SimpleNN(hidden=hidden)
+        model.W1 = W1
+        model.b1 = b1
+        model.W2 = W2
+        model.b2 = b2
+        return model
+
+    def clone(self):
+        new = SimpleNN(hidden=self.W1.shape[0])
+        new.W1 = self.W1.copy()
+        new.b1 = self.b1.copy()
+        new.W2 = self.W2.copy()
+        new.b2 = self.b2
+        return new
 model = SimpleNN()
