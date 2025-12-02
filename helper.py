@@ -2,7 +2,7 @@ import os
 import sys
 import pickle
 import gzip
-
+import csv
 
 
 ROWS = 6
@@ -13,10 +13,13 @@ RESET  = "\033[0m"
 BOLD   = "\033[1m"
 DIM    = "\033[2m"
 
-RED    = "\033[31m"
-YELLOW = "\033[33m"
-CYAN   = "\033[36m"
-WHITE  = "\033[37m"
+RED     = '\033[91m'
+GREEN   = '\033[92m'
+YELLOW  = '\033[93m'
+BLUE    = '\033[94m'
+MAGENTA = '\033[95m'
+CYAN    = '\033[96m'
+WHITE   = '\033[97m'
 
 
 USE_COLORS = True  # set to False if your terminal is weird
@@ -234,9 +237,11 @@ def evaluate_models(models, games_vs_prev=200, games_vs_random=400):
     Printed nicely with colors.
     """
     n = len(models)
+    rows = []   # <-- collect results
+
     if n == 0:
         print(color("No models to evaluate.", BOLD, RED))
-        return
+        return rows
 
     # --- successive model comparisons ---
     print(color("\n================ MODEL LADDER EVAL ================", BOLD, CYAN))
@@ -366,6 +371,7 @@ def evaluate_models(models, games_vs_prev=200, games_vs_random=400):
 
     print(color("=================================================\n", BOLD, CYAN))
 
+    return rows
 
 def save_buffer(buffer, path="replay_buffer.pkl.gz"):
     """

@@ -1,22 +1,24 @@
 import numpy as np
-import random
+import os
+import csv
 from neural_network import SimpleNN
-from helper import board_to_vector, evaluate_models, color, BOLD, DIM, RED, YELLOW, CYAN, WHITE, load_buffer, save_buffer
-from engines import engineR, engine, explore
-from self_play import(
-    simulate
+from helper import (
+    board_to_vector, evaluate_models,
+    color, BOLD, CYAN, YELLOW, GREEN, RED, MAGENTA,
+    load_buffer, save_buffer
 )
+from self_play import simulate
+from engines import engineR  # not strictly needed but fine
 
-def train_on_dataset(model, X, y, epochs=10, lr=0.01, shuffle=True, verbose=True):
-    X = np.asarray(X, dtype=float)
-    y = np.asarray(y, dtype=float)
-    N = X.shape[0]
-
-    # For tracking best epoch and EMA (smoothed) losses
-    best_bce = float("inf")
-    ema_bce = None
-    ema_mse = None
-    ema_alpha = 0.1  # 10% new, 90% old
+def train_on_buffer_az(model, buffer, epochs=4, lr=0.005,
+                       shuffle=True, verbose=True):
+    """
+    AlphaZero-style training on a replay buffer of:
+        (board, player, pi, result)
+    """
+    N = len(buffer)
+    if N == 0:
+        return
 
     for epoch in range(epochs):
         indices = np.arange(N)
@@ -24,130 +26,202 @@ def train_on_dataset(model, X, y, epochs=10, lr=0.01, shuffle=True, verbose=True
             np.random.shuffle(indices)
 
         total_bce = 0.0
-        total_mse = 0.0
+        total_ce = 0.0
 
-        for i in indices:
-            x_i = X[i]
-            y_i = y[i]
+        for idx in indices:
+            board, player, pi, result = buffer[idx]
 
-            # Forward pass
-            pred = model.forward(x_i)
+            x = board_to_vector(board, player)
 
-            # Clamp prediction a bit to avoid log(0) in BCE
-            eps = 1e-7
-            p = float(np.clip(pred, eps, 1.0 - eps))
+            # Value label: 1 (win for player), 0 (loss), 0.5 (draw)
+            if result == 0.5:
+                y_val = 0.5
+            else:
+                y_val = 1.0 if player == result else 0.0
 
-            # Binary cross-entropy (this matches your gradient dz2 = a2 - y)
-            # Works fine even when y_i is 0.5 (draws)
-            bce_loss = -(y_i * np.log(p) + (1.0 - y_i) * np.log(1.0 - p))
+            # Ensure pi is a proper distribution
+            pi_arr = np.asarray(pi, dtype=float)
+            s = pi_arr.sum()
+            if s <= 0.0 or not np.isfinite(s):
+                pi_arr = np.ones_like(pi_arr) / len(pi_arr)
+            else:
+                pi_arr = pi_arr / s
 
-            # MSE-ish loss (your old one), mainly for intuition
-            mse_loss = 0.5 * (pred - y_i) ** 2
+            # Forward
+            p_pred, v_pred = model.forward_policy_value(x)
 
+            # Losses for logging only
+            v = float(v_pred)
+            eps_num = 1e-7
+            v_clamped = max(min(v, 1.0 - eps_num), eps_num)
+            bce_loss = -(y_val * np.log(v_clamped) +
+                         (1.0 - y_val) * np.log(1.0 - v_clamped))
             total_bce += bce_loss
-            total_mse += mse_loss
 
-            # Backward pass + parameter update
-            model.backward(y_i, lr=lr)
+            p_pred = np.asarray(p_pred, dtype=float)
+            ce_loss = -np.sum(pi_arr * np.log(np.clip(p_pred, eps_num, 1.0)))
+            total_ce += ce_loss
+
+            # Backward update on combined loss
+            model.backward_az(y_val, pi_arr, lr=lr,
+                              value_weight=1.0, policy_weight=1.0)
 
         avg_bce = total_bce / N
-        avg_mse = total_mse / N
-
-        # Update EMA
-        if ema_bce is None:
-            ema_bce = avg_bce
-            ema_mse = avg_mse
-        else:
-            ema_bce = (1 - ema_alpha) * ema_bce + ema_alpha * avg_bce
-            ema_mse = (1 - ema_alpha) * ema_mse + ema_alpha * avg_mse
-
-        # Track best epoch by BCE
-        improved = avg_bce < best_bce
-        if improved:
-            best_bce = avg_bce
+        avg_ce = total_ce / N
 
         if verbose:
-            # Choose color: cyan normally, yellow if worse than best, greenish (cyan) with star if best
-            if improved:
-                line_color = CYAN
-                star = " ★"
-            else:
-                line_color = YELLOW
-                star = ""
-
-            msg = (
-                f"Epoch {epoch+1}/{epochs}"
-                f" | BCE: {avg_bce:.4f} (EMA: {ema_bce:.4f})"
-                f" | MSE: {avg_mse:.4f} (EMA: {ema_mse:.4f})"
+            print(
+                color("    ▸ ", BOLD, CYAN) +
+                color(f"Epoch {epoch+1}/{epochs} ", BOLD, MAGENTA) +
+                color(f"Value={avg_bce:.4f} ", GREEN) +
+                color(f"Policy={avg_ce:.4f}", YELLOW)
             )
 
-            print(color(msg + star, BOLD, line_color))
-
-
-def train(model, dataset, epochs=10, lr=0.01):
-    X = []
-    y = []
-
-    for board, player, result in dataset:
-        X.append(board_to_vector(board, player))
-
-        if result == 0.5:
-            # draw → neutral label
-            label = 0.5
-        else:
-            # result is 1 or 2 (the winner)
-            label = 1.0 if player == result else 0.0
-
-        y.append(label)
-
-    train_on_dataset(model, X, y, epochs=epochs, lr=lr)
-
-REPLAY_PATH = "replay_buffer.pkl.gz"
+REPLAY_PATH = "replay_buffer_az.pkl.gz"
 MAX_BUFFER_SIZE = 100000
 
 model = SimpleNN(hidden=256)
 models = []
 
 
-iterations     = 20
-games_initial  = 3000    # random warmup
+iterations     = 40
+games_initial  = 1000    # random warmup
 games_per_iter = 1000    # self-play games per generation
 
-train_epochs   = 4       # passes over buffer each gen
+train_epochs   = 6       # passes over buffer each gen
 train_lr       = 0.005   # smaller than 0.01 → more stable
 
-eps = 0.8
+eps = 0.5
 eps_min = 0.05
-eps_decay = 0.9
+eps_decay = 0.95
 
-train_sims = 30
+train_sims = 50
 
 buffer = load_buffer(REPLAY_PATH)
 
+train_log_path = "csv/training_log.csv"
+if not os.path.exists(train_log_path):
+    with open(train_log_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "iteration",
+            "wins_p1",
+            "wins_p2",
+            "draws",
+            "total_games",
+            "winrate_p1",
+            "winrate_p2",
+            "draw_rate",
+            "epsilon"
+        ])
+
 if not buffer:
-    # if none, do initial random warmup
-    data_states, win1, win2, draw = simulate(None, None, games=games_initial, display=True)
+    # Initial warmup with random-ish play
+    print(color("No replay buffer found. Generating warmup games...", BOLD, YELLOW))
+    data_states, win1, win2, draw = simulate(
+        None, None,
+        games=games_initial,
+        e1=0.0, e2=0.0,
+        display=False,
+        simulations=10,      # irrelevant when model=None
+        record_policy=True,
+    )
     buffer = list(data_states)
+    print(color(f"Warmup done: P1={win1}, P2={win2}, D={draw}", BOLD, CYAN))
+
 
 for t in range(iterations):
-    print("Training model", t, "with eps =", eps)
+    print(color(f"\n====== TRAINING ITERATION {t} ======", BOLD, CYAN))
+    print(color(f"Exploration ε = {eps:.3f}", BOLD, YELLOW))
 
-    train(model, buffer, epochs=train_epochs, lr=train_lr)
+    # Train on current buffer
+    train_on_buffer_az(model, buffer, epochs=train_epochs, lr=train_lr)
+
+    # Save snapshot
     models.append(model.clone())
 
-    new_states, win1, win2, draw = simulate(model, model, games=games_per_iter, e1=eps, e2=eps, simulations=train_sims)
-    # data = new_states  # if you want to *only* use latest states
+    # Generate new self-play games with current model
+    new_states, win1, win2, draw = simulate(
+        model, model,
+        games=games_per_iter,
+        e1=eps, e2=eps,
+        display=False,
+        simulations=train_sims,
+        record_policy=True,
+    )
+
+    print(
+        color("Self-Play Results → ", BOLD, CYAN) +
+        color(f"P1: {win1}  ", GREEN) +
+        color(f"P2: {win2}  ", RED) +
+        color(f"Draws: {draw}", YELLOW)
+    )
+
+    total_games = win1 + win2 + draw
+    with open(train_log_path, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            iterations,
+            win1,
+            win2,
+            draw,
+            total_games,
+            win1 / total_games if total_games else 0,
+            win2 / total_games if total_games else 0,
+            draw / total_games if total_games else 0,
+            eps
+        ])
+        
     buffer += new_states
     if len(buffer) > MAX_BUFFER_SIZE:
         buffer = buffer[-MAX_BUFFER_SIZE:]
+
+
+    print(color(f"Replay Buffer Size: {len(buffer)} / {MAX_BUFFER_SIZE}", BOLD, MAGENTA))
+    
     eps = max(eps * eps_decay, eps_min)
 
-save_buffer(buffer, REPLAY_PATH)
+    save_buffer(buffer, REPLAY_PATH)
 
+# Save models
 for idx, m in enumerate(models):
     m.save(f"models/model_gen_{idx}.npz")
 
 final_model = models[-1]
 final_model.save("models/model_final.npz")
 
-evaluate_models(models, games_vs_prev=100, games_vs_random=100)
+print(color("\n============================================", BOLD, CYAN))
+print(color("       TRAINING COMPLETE — MODEL SAVED       ", BOLD, GREEN))
+print(color("============================================\n", BOLD, CYAN))
+
+# Evaluate ladder
+rows = evaluate_models(models, games_vs_prev=100, games_vs_random=100)
+
+csv_path = "csv/model_eval_summary.csv"
+with open(csv_path, "w", newline="") as f:
+    writer = csv.writer(f)
+    writer.writerow([
+        "kind",
+        "model_i",
+        "model_j",
+        "wins_i",
+        "wins_j",
+        "draws",
+        "total",
+        "win_rate_i",
+        "win_rate_j",
+    ])
+    for r in rows:
+        writer.writerow([
+            r["kind"],
+            r["model_i"],
+            r["model_j"],
+            r["wins_i"],
+            r["wins_j"],
+            r["draws"],
+            r["total"],
+            f"{r['win_rate_i']:.6f}",
+            f"{r['win_rate_j']:.6f}",
+        ])
+
+print(color(f"Evaluation summary saved to {csv_path}", BOLD, CYAN))

@@ -3,6 +3,7 @@
 import math
 
 from helper import (
+    ROWS, COLS,
     get_valid_moves,
     drop_piece,
     check_win,
@@ -13,7 +14,7 @@ from helper import (
 
 class MCTSNode:
     def __init__(self, prior: float):
-        # Prior probability from "policy" (we now derive from NN, not uniform)
+        # Prior probability from policy network
         self.P = prior
 
         # Visit statistics
@@ -28,13 +29,13 @@ class MCTSNode:
 class MCTS:
     def __init__(self, model, cpuct: float = 1.4):
         """
-        model: your neural net with .forward(x) -> [0,1] win prob
+        model: your neural net with .forward_policy_value(x)
         cpuct: exploration constant (like AlphaZero's c_puct)
         """
         self.model = model
         self.cpuct = cpuct
 
-    def _terminal_value(self, board, player_to_move: int) -> float | None:
+    def _terminal_value(self, board, player_to_move: int):
         """
         Check if board is terminal. If so, return value in [-1, 0, 1]
         from the perspective of player_to_move.
@@ -51,61 +52,51 @@ class MCTS:
             return 1.0 if player_to_move == 1 else -1.0
         if p2_wins:
             return 1.0 if player_to_move == 2 else -1.0
-        # draw
-        return 0.0
+        return 0.0  # draw
 
-    def _nn_value(self, board, player_to_move: int) -> float:
+    def _nn_policy_value(self, board, player_to_move: int):
         """
-        Use the neural network to evaluate the position for player_to_move.
-        Returns a value in [-1,1] (converted from [0,1] sigmoid).
+        Use the NN to get (policy, value) for player_to_move.
+        policy: length-7 probs, value in [-1,1].
         """
         x = board_to_vector(board, player_to_move)
-        p = float(self.model.forward(x))  # [0,1] win prob
-        return 2.0 * p - 1.0             # map [0,1] -> [-1,1]
+        pi, v_prob = self.model.forward_policy_value(x)
+        # map [0,1] -> [-1,1]
+        v = 2.0 * float(v_prob) - 1.0
+        return pi, v
 
-    def _policy_priors(self, board, player_to_move: int, moves):
+    def _masked_priors(self, board, player_to_move: int):
         """
-        Build policy priors over legal moves using the NN.
-
-        For each move, we:
-          - apply it to a copy of the board,
-          - evaluate the resulting position for player_to_move,
-          - use those evaluations as logits, then softmax.
-
-        This gives us non-uniform priors that favor moves that
-        look more promising to the NN.
+        Get NN policy and mask invalid moves.
+        Returns dict: move -> prior.
         """
-        if not moves:
+        valid_moves = get_valid_moves(board)
+        if not valid_moves:
             return {}
 
-        # Evaluate each child state
-        logits = []
-        for m in moves:
-            # copy board
-            b_child = [row[:] for row in board]
-            drop_piece(b_child, m, player_to_move)
-            # evaluate from player_to_move's perspective
-            v_child = self._nn_value(b_child, player_to_move)
-            logits.append(v_child)
-
-        # Softmax over logits for numerical stability
-        max_logit = max(logits)
-        exps = [math.exp(l - max_logit) for l in logits]
-        sum_exps = sum(exps)
-
-        # Fallback to uniform if something goes weird
-        if sum_exps <= 0.0 or not math.isfinite(sum_exps):
-            prior = 1.0 / len(moves)
-            return {m: prior for m in moves}
+        pi_raw, _ = self._nn_policy_value(board, player_to_move)
+        pi_raw = list(pi_raw)
 
         priors = {}
-        for m, e in zip(moves, exps):
-            priors[m] = e / sum_exps
+        s = 0.0
+        for c in valid_moves:
+            p = max(pi_raw[c], 1e-6)  # avoid zero
+            priors[c] = p
+            s += p
+
+        if s <= 0.0 or not math.isfinite(s):
+            # fallback uniform
+            uniform = 1.0 / len(valid_moves)
+            return {c: uniform for c in valid_moves}
+
+        for c in priors:
+            priors[c] /= s
+
         return priors
 
-    def _select_child(self, node: MCTSNode) -> tuple[int, MCTSNode]:
+    def _select_child(self, node: MCTSNode):
         """
-        Select a child using the PUCT (AlphaZero-style) formula.
+        Select a child using PUCT.
         Returns (move, child_node).
         """
         best_score = -1e9
@@ -125,74 +116,110 @@ class MCTS:
 
     def _simulate(self, board, player_to_move: int, node: MCTSNode) -> float:
         """
-        Run one MCTS simulation from (board, player_to_move, node).
+        One MCTS simulation.
         Returns value in [-1,1] from the perspective of player_to_move
-        at *this* node.
+        at this node.
         """
-        # 1. Check for terminal state
+        # 1. Terminal?
         terminal = self._terminal_value(board, player_to_move)
         if terminal is not None:
             return terminal
 
-        # 2. If this node has no children yet, expand and evaluate with NN
+        # 2. Expand if leaf
         if not node.children:
-            moves = get_valid_moves(board)
-            if not moves:
-                v = 0.0  # no moves: treat as draw
+            priors = self._masked_priors(board, player_to_move)
+            if not priors:
+                v = 0.0
             else:
-                # --- NEW: use NN-derived priors instead of uniform ---
-                priors = self._policy_priors(board, player_to_move, moves)
-                for m in moves:
-                    node.children[m] = MCTSNode(prior=priors.get(m, 0.0))
-
-                # NN value of the *current* state
-                v = self._nn_value(board, player_to_move)
+                for m, p in priors.items():
+                    node.children[m] = MCTSNode(prior=p)
+                # Value for current state
+                _, v = self._nn_policy_value(board, player_to_move)
 
             node.N += 1
             node.W += v
             node.Q = node.W / node.N
             return v
 
-        # 3. Otherwise, select a child using PUCT
+        # 3. Otherwise, select a child
         move, child = self._select_child(node)
 
-        # 4. Apply the move to the board
+        # 4. Apply move
         drop_piece(board, move, player_to_move)
         next_player = 2 if player_to_move == 1 else 1
 
-        # 5. Recurse; sign flip because perspective changes
+        # 5. Recurse with sign flip (perspective changes)
         v = -self._simulate(board, next_player, child)
 
-        # 6. Backpropagate
+        # 6. Backprop
         node.N += 1
         node.W += v
         node.Q = node.W / node.N
 
         return v
 
-    def search(self, board, player_to_move: int, num_simulations: int = 200) -> int:
+    def search(self, board, player_to_move: int, num_simulations: int = 200):
         """
-        Run MCTS from (board, player_to_move) and return the best move.
-        Best move = child with highest visit count N.
+        Run MCTS and return best move.
         """
         root = MCTSNode(prior=1.0)
 
         for _ in range(num_simulations):
-            b = [row[:] for row in board]  # fresh copy
+            b = [row[:] for row in board]
             self._simulate(b, player_to_move, root)
 
         if not root.children:
-            # No moves (terminal), return -1 as a sentinel
             return -1
 
-        # Choose move with the highest visit count
         best_move = max(root.children.items(), key=lambda kv: kv[1].N)[0]
         return best_move
+
+    def search_with_policy(self, board, player_to_move: int, num_simulations: int = 200):
+        """
+        Run MCTS and return (best_move, visit_policy),
+        where visit_policy is a length-7 vector of visit-count-based probs.
+        """
+        root = MCTSNode(prior=1.0)
+
+        for _ in range(num_simulations):
+            b = [row[:] for row in board]
+            self._simulate(b, player_to_move, root)
+
+        if not root.children:
+            return -1, [0.0] * COLS
+
+        # Best move by visit count
+        best_move, _ = max(root.children.items(), key=lambda kv: kv[1].N)
+
+        # Build policy from visit counts
+        visits = [0.0] * COLS
+        total_N = 0.0
+        for m, child in root.children.items():
+            visits[m] = child.N
+            total_N += child.N
+
+        if total_N <= 0.0:
+            # fallback: one-hot on best_move
+            pi = [0.0] * COLS
+            if 0 <= best_move < COLS:
+                pi[best_move] = 1.0
+            return best_move, pi
+
+        pi = [v / total_N for v in visits]
+        return best_move, pi
 
 
 def mcts_move(board, player: int, model, num_simulations: int = 200, cpuct: float = 1.4) -> int:
     """
-    Convenience wrapper: pick a move for `player` on `board` using MCTS+NN.
+    Original API: just return the move.
     """
     mcts = MCTS(model=model, cpuct=cpuct)
     return mcts.search(board, player_to_move=player, num_simulations=num_simulations)
+
+
+def mcts_move_with_policy(board, player: int, model, num_simulations: int = 200, cpuct: float = 1.4):
+    """
+    New API: return (move, visit_policy).
+    """
+    mcts = MCTS(model=model, cpuct=cpuct)
+    return mcts.search_with_policy(board, player_to_move=player, num_simulations=num_simulations)
