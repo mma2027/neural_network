@@ -8,7 +8,7 @@ from engines import(
     engineR, engine
 )
 
-def self_play(model1, model2, e1=0, e2=0, record_states=True, display=True):
+def self_play(model1, model2, e1=0, e2=0, record_states=True, display=True, simulations=200):
     from engines import engine
     board = create_board()
     current_player = 1
@@ -47,21 +47,21 @@ def self_play(model1, model2, e1=0, e2=0, record_states=True, display=True):
             # Safety net: treat as draw
             return None, ai_states
         if current_player == 1:
-            col = engine(board, current_player, model1, e1)
+            col = engine(board, current_player, model1, e1, simulations=simulations)
         else:
-            col = engine(board, current_player, model2, e2)
+            col = engine(board, current_player, model2, e2, simulations=simulations)
         drop_piece(board, col, current_player)
 
         # Switch player
         current_player = 2 if current_player == 1 else 1
 
-def simulate(model1, model2, games=1, e1=0, e2=0, display=True):
+def simulate(model1, model2, games=1, e1=0, e2=0, display=True, simulations=200):
     win1 = 0
     win2 = 0
     draw = 0
     ai_states = []
     for _ in range(games):
-        result, states = self_play(model1, model2, e1, e2, record_states=True, display=display)
+        result, states = self_play(model1, model2, e1, e2, record_states=True, display=display, simulations=simulations)
         # print(len(states))
         if states is not None:
             ai_states += states

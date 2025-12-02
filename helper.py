@@ -3,6 +3,8 @@ import sys
 import pickle
 import gzip
 
+
+
 ROWS = 6
 COLS = 7
 
@@ -163,7 +165,15 @@ def board_to_vector(board, player):
                 vector.append(0)
     return vector
 
-def predict_move(board, player, model):
+def predict_move(board, player, model, use_mcts: bool = True, simulations: int = 200):
+    """
+    Pick a move for `player` using either MCTS+NN (default) or greedy 1-ply NN.
+    """
+    if use_mcts:
+        from mcts import mcts_move
+        return mcts_move(board, player, model, num_simulations=simulations)
+    
+    # Fallback: simple greedy NN
     moves = get_valid_moves(board)
     best_score = -1
     best_col = None
@@ -373,3 +383,4 @@ def load_buffer(path="replay_buffer.pkl.gz"):
         return []
     with gzip.open(path, "rb") as f:
         return pickle.load(f)
+    

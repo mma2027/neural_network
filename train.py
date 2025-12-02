@@ -104,32 +104,38 @@ def train(model, dataset, epochs=10, lr=0.01):
 
 REPLAY_PATH = "replay_buffer.pkl.gz"
 MAX_BUFFER_SIZE = 100000
-iteration = 20
+
+model = SimpleNN(hidden=256)
 models = []
+
+
+iterations     = 20
+games_initial  = 3000    # random warmup
+games_per_iter = 1000    # self-play games per generation
+
+train_epochs   = 4       # passes over buffer each gen
+train_lr       = 0.005   # smaller than 0.01 → more stable
 
 eps = 0.8
 eps_min = 0.05
-eps_decay = 0.95
+eps_decay = 0.9
+
+train_sims = 30
 
 buffer = load_buffer(REPLAY_PATH)
 
 if not buffer:
     # if none, do initial random warmup
-    data_states, win1, win2, draw = simulate(None, None, games=5000, display=True)
+    data_states, win1, win2, draw = simulate(None, None, games=games_initial, display=True)
     buffer = list(data_states)
 
-for t in range(iteration):
+for t in range(iterations):
     print("Training model", t, "with eps =", eps)
-    if t == 0:
-        model = SimpleNN(hidden=256)
-    else:
-        # reuse previous model instead of making a fresh one
-        model = models[-1]
 
-    train(model, buffer, epochs=15, lr=0.01)
+    train(model, buffer, epochs=train_epochs, lr=train_lr)
     models.append(model.clone())
 
-    new_states, win1, win2, draw = simulate(model, model, games=3000, e1=eps, e2=eps)
+    new_states, win1, win2, draw = simulate(model, model, games=games_per_iter, e1=eps, e2=eps, simulations=train_sims)
     # data = new_states  # if you want to *only* use latest states
     buffer += new_states
     if len(buffer) > MAX_BUFFER_SIZE:
@@ -144,4 +150,4 @@ for idx, m in enumerate(models):
 final_model = models[-1]
 final_model.save("models/model_final.npz")
 
-evaluate_models(models, games_vs_prev=1000, games_vs_random=4000)
+evaluate_models(models, games_vs_prev=100, games_vs_random=100)
