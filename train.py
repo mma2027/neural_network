@@ -5,7 +5,8 @@ from neural_network import SimpleNN
 from helper import (
     board_to_vector, evaluate_models,
     color, BOLD, CYAN, YELLOW, GREEN, RED, MAGENTA,
-    load_buffer, save_buffer
+    load_buffer, save_buffer, head_to_head
+
 )
 from self_play import simulate
 from engines import engineR  # not strictly needed but fine
@@ -80,22 +81,29 @@ def train_on_buffer_az(model, buffer, epochs=4, lr=0.005,
 REPLAY_PATH = "replay_buffer_az.pkl.gz"
 MAX_BUFFER_SIZE = 100000
 
+os.makedirs("csv", exist_ok=True)
+best_model_name = "gen_0"
 model = SimpleNN(hidden=256)
 models = []
 
 
-iterations     = 40
-games_initial  = 1000    # random warmup
-games_per_iter = 1000    # self-play games per generation
+iterations     = 10
+games_initial  = 200    # random warmup
+games_per_iter = 200    # self-play games per generation
 
-train_epochs   = 6       # passes over buffer each gen
-train_lr       = 0.005   # smaller than 0.01 → more stable
+train_epochs   = 3       # passes over buffer each gen
+train_lr       = 0.001   # smaller than 0.01 → more stable
 
-eps = 0.5
-eps_min = 0.05
+eps = 0
+eps_min = 0
 eps_decay = 0.95
 
-train_sims = 50
+train_sims = 400
+warmup_iters = 5
+# Gating params: how we decide if a new model is better
+gating_games = 100        # number of head-to-head games per iteration
+gating_threshold = 0.55  # require at least 50% winrate to accept
+
 
 buffer = load_buffer(REPLAY_PATH)
 
@@ -134,11 +142,53 @@ for t in range(iterations):
     print(color(f"\n====== TRAINING ITERATION {t} ======", BOLD, CYAN))
     print(color(f"Exploration ε = {eps:.3f}", BOLD, YELLOW))
 
-    # Train on current buffer
-    train_on_buffer_az(model, buffer, epochs=train_epochs, lr=train_lr)
+    candidate = model.clone()
+    train_on_buffer_az(candidate, buffer, epochs=train_epochs, lr=train_lr)
+
+    # 2) Deterministic head-to-head: candidate vs current model
+    print(color("Running gating match (candidate vs current best)...", BOLD, MAGENTA))
+    w_new, w_best, d = head_to_head(
+        candidate,
+        model,
+        games=gating_games,
+        simulations=train_sims,
+        label_new=f"gen_{t}_candidate",
+        label_best=best_model_name,
+        tag=f"iter_{t}",
+        use_dirichlet=True,
+        dirichlet_alpha=0.3,
+        dirichlet_eps=0.10, 
+    )
+
+    if t < warmup_iters:
+        accepted_name = f"gen_{t}"
+        print(color(
+            f"  [WARMUP] Auto-accept candidate as new best ({accepted_name}).",
+            BOLD, GREEN
+        ))
+        model = candidate
+        best_model_name = accepted_name
+    elif w_new / (w_new + w_best + d) >= gating_threshold:
+        accepted_name = f"gen_{t}"
+        print(color(
+            f"  Candidate PASSES gating (winrate={w_new / (w_new + w_best + d):.3f} ≥ {gating_threshold:.2f}) "
+            f"→ new best model ({accepted_name}).",
+            BOLD, GREEN
+        ))
+        model = candidate
+        best_model_name = accepted_name
+    else:
+        print(color(
+            f"  Candidate FAILS gating (winrate={w_new / (w_new + w_best + d):.3f} < {gating_threshold:.2f}) "
+            f"→ keeping current best ({best_model_name}).",
+            BOLD, RED
+        ))
+
+    # 3) Save snapshot of the current BEST model after gating
+    models.append(model.clone())
+
 
     # Save snapshot
-    models.append(model.clone())
 
     # Generate new self-play games with current model
     new_states, win1, win2, draw = simulate(
@@ -148,6 +198,7 @@ for t in range(iterations):
         display=False,
         simulations=train_sims,
         record_policy=True,
+        use_dirichlet=True,
     )
 
     print(
@@ -161,7 +212,7 @@ for t in range(iterations):
     with open(train_log_path, "a", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([
-            iterations,
+            t,
             win1,
             win2,
             draw,
@@ -184,9 +235,13 @@ for t in range(iterations):
     save_buffer(buffer, REPLAY_PATH)
 
 # Save models
+os.makedirs("models", exist_ok=True)
+
+# Save all snapshots as model_gen_0, model_gen_1, ...
 for idx, m in enumerate(models):
     m.save(f"models/model_gen_{idx}.npz")
 
+# Final model is the last (best-so-far) snapshot
 final_model = models[-1]
 final_model.save("models/model_final.npz")
 

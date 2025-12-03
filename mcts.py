@@ -1,7 +1,7 @@
 # mcts.py
 
 import math
-
+import numpy as np
 from helper import (
     ROWS, COLS,
     get_valid_moves,
@@ -106,7 +106,10 @@ class MCTS:
         parent_visits = node.N + 1e-8
 
         for move, child in node.children.items():
-            u = child.Q + self.cpuct * child.P * math.sqrt(parent_visits) / (1.0 + child.N)
+
+            q_eff = -child.Q
+
+            u = q_eff + self.cpuct * child.P * math.sqrt(parent_visits) / (1.0 + child.N)
             if u > best_score:
                 best_score = u
                 best_move = move
@@ -114,7 +117,10 @@ class MCTS:
 
         return best_move, best_child
 
-    def _simulate(self, board, player_to_move: int, node: MCTSNode) -> float:
+    def _simulate(self, board, player_to_move: int, node: MCTSNode, is_root: bool,
+                    dirichlet_noise: bool,
+                    dirichlet_alpha: float,
+                    dirichlet_eps: float,) -> float:
         """
         One MCTS simulation.
         Returns value in [-1,1] from the perspective of player_to_move
@@ -123,14 +129,33 @@ class MCTS:
         # 1. Terminal?
         terminal = self._terminal_value(board, player_to_move)
         if terminal is not None:
+            node.N += 1
+            node.W += terminal
+            node.Q = node.W / node.N
             return terminal
-
+        
         # 2. Expand if leaf
         if not node.children:
             priors = self._masked_priors(board, player_to_move)
             if not priors:
                 v = 0.0
             else:
+                if is_root and dirichlet_noise and len(priors) > 0:
+                    moves = list(priors.keys())
+                    # sample Dirichlet noise over the moves
+                    noise = np.random.dirichlet(
+                        [dirichlet_alpha] * len(moves)
+                    )
+                    # mix priors with noise
+                    for m, eta in zip(moves, noise):
+                        p_old = priors[m]
+                        priors[m] = (1.0 - dirichlet_eps) * p_old + dirichlet_eps * eta
+                    # re-normalize to be safe
+                    s = sum(priors.values())
+                    if s > 0.0:
+                        for m in priors:
+                            priors[m] /= s
+
                 for m, p in priors.items():
                     node.children[m] = MCTSNode(prior=p)
                 # Value for current state
@@ -145,11 +170,17 @@ class MCTS:
         move, child = self._select_child(node)
 
         # 4. Apply move
-        drop_piece(board, move, player_to_move)
+        ok = drop_piece(board, move, player_to_move)
+        if not ok:
+            raise RuntimeError(f"MCTS attempted illegal move {move} on supposedly valid board")
+        
         next_player = 2 if player_to_move == 1 else 1
 
         # 5. Recurse with sign flip (perspective changes)
-        v = -self._simulate(board, next_player, child)
+        v = -self._simulate(board, next_player, child,is_root=False,
+                            dirichlet_noise=dirichlet_noise,
+                            dirichlet_alpha=dirichlet_alpha,
+                            dirichlet_eps=dirichlet_eps,)
 
         # 6. Backprop
         node.N += 1
@@ -158,7 +189,8 @@ class MCTS:
 
         return v
 
-    def search(self, board, player_to_move: int, num_simulations: int = 200):
+    def search(self, board, player_to_move: int, num_simulations: int = 200, 
+               dirichlet_noise: bool = False, dirichlet_alpha: float = 0.3, dirichlet_eps: float = 0.25):
         """
         Run MCTS and return best move.
         """
@@ -166,7 +198,10 @@ class MCTS:
 
         for _ in range(num_simulations):
             b = [row[:] for row in board]
-            self._simulate(b, player_to_move, root)
+            self._simulate(b, player_to_move, root, is_root=True,
+                dirichlet_noise=dirichlet_noise,
+                dirichlet_alpha=dirichlet_alpha,
+                dirichlet_eps=dirichlet_eps,)
 
         if not root.children:
             return -1
@@ -174,7 +209,8 @@ class MCTS:
         best_move = max(root.children.items(), key=lambda kv: kv[1].N)[0]
         return best_move
 
-    def search_with_policy(self, board, player_to_move: int, num_simulations: int = 200):
+    def search_with_policy(self, board, player_to_move: int, num_simulations: int = 200,
+                           dirichlet_noise: bool = False, dirichlet_alpha: float = 0.3, dirichlet_eps: float = 0.25):
         """
         Run MCTS and return (best_move, visit_policy),
         where visit_policy is a length-7 vector of visit-count-based probs.
@@ -183,7 +219,10 @@ class MCTS:
 
         for _ in range(num_simulations):
             b = [row[:] for row in board]
-            self._simulate(b, player_to_move, root)
+            self._simulate(b, player_to_move, root, is_root=True,
+                dirichlet_noise=dirichlet_noise,
+                dirichlet_alpha=dirichlet_alpha,
+                dirichlet_eps=dirichlet_eps,)
 
         if not root.children:
             return -1, [0.0] * COLS
@@ -209,17 +248,22 @@ class MCTS:
         return best_move, pi
 
 
-def mcts_move(board, player: int, model, num_simulations: int = 200, cpuct: float = 1.4) -> int:
+def mcts_move(board, player: int, model, num_simulations: int = 200, cpuct: float = 1.4, dirichlet_noise=False, dirichlet_alpha=0.3, dirichlet_eps=0.25) -> int:
     """
     Original API: just return the move.
     """
     mcts = MCTS(model=model, cpuct=cpuct)
-    return mcts.search(board, player_to_move=player, num_simulations=num_simulations)
+    return mcts.search(board, player_to_move=player, num_simulations=num_simulations, dirichlet_noise=dirichlet_noise,
+        dirichlet_alpha=dirichlet_alpha,
+        dirichlet_eps=dirichlet_eps,)
 
 
-def mcts_move_with_policy(board, player: int, model, num_simulations: int = 200, cpuct: float = 1.4):
+def mcts_move_with_policy(board, player: int, model, num_simulations: int = 200, cpuct: float = 1.4, dirichlet_noise=False, dirichlet_alpha=0.3, dirichlet_eps=0.25):
     """
     New API: return (move, visit_policy).
     """
     mcts = MCTS(model=model, cpuct=cpuct)
-    return mcts.search_with_policy(board, player_to_move=player, num_simulations=num_simulations)
+    return mcts.search_with_policy(board, player_to_move=player, num_simulations=num_simulations,
+        dirichlet_noise=dirichlet_noise,
+        dirichlet_alpha=dirichlet_alpha,
+        dirichlet_eps=dirichlet_eps,)

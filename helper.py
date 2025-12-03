@@ -3,6 +3,7 @@ import sys
 import pickle
 import gzip
 import csv
+import datetime
 
 
 ROWS = 6
@@ -225,6 +226,144 @@ def _play_match(model1, model2, games, e1=0.0, e2=0.0):
             draw += 1
     return win1, win2, draw
 
+def head_to_head(model_new,
+                 model_best,
+                 games=40,
+                 simulations=50,
+                 label_new="model_new",
+                 label_best="model_best",
+                 tag=None,
+                 csv_path="csv/head_to_head_log.csv",
+                 use_dirichlet=False, dirichlet_alpha=0.3, dirichlet_eps=0.25):
+    """
+    Deterministic head-to-head match between two models using self_play.
+
+    - model_new vs model_best
+    - Alternates colors each game to balance first-player advantage.
+    - Uses e1 = e2 = 0.0 (no epsilon randomness).
+    - Uses MCTS with `simulations` simulations.
+    - Logs results to a CSV file in the csv/ folder.
+    - Prints a colorful diagnostic summary.
+
+    Returns (wins_new, wins_best, draws).
+    """
+    from self_play import self_play
+
+    if games <= 0:
+        return 0, 0, 0
+
+    wins_new = 0
+    wins_best = 0
+    draws = 0
+
+    # Run games, alternating who is Player 1
+    for g in range(games):
+        if g % 2 == 0:
+            # model_new as Player 1, model_best as Player 2
+            result, _ = self_play(
+                model_new, model_best,
+                e1=0.0, e2=0.0,
+                record_states=False,
+                display=False,
+                simulations=simulations,
+                use_dirichlet=use_dirichlet,
+                dirichlet_alpha=dirichlet_alpha,
+                dirichlet_eps=dirichlet_eps
+            )
+            if result == 1:
+                wins_new += 1
+            elif result == 2:
+                wins_best += 1
+            else:
+                draws += 1
+        else:
+            # model_best as Player 1, model_new as Player 2
+            result, _ = self_play(
+                model_best, model_new,
+                e1=0.0, e2=0.0,
+                record_states=False,
+                display=False,
+                simulations=simulations,
+                use_dirichlet=use_dirichlet,
+                dirichlet_alpha=dirichlet_alpha,
+                dirichlet_eps=dirichlet_eps
+            )
+            if result == 1:
+                wins_best += 1
+            elif result == 2:
+                wins_new += 1
+            else:
+                draws += 1
+
+    total = wins_new + wins_best + draws
+    winrate_new = wins_new / total if total > 0 else 0.0
+    winrate_best = wins_best / total if total > 0 else 0.0
+    draw_rate = draws / total if total > 0 else 0.0
+
+    # Ensure csv folder exists
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+
+    # Write (or append) to CSV
+    file_exists = os.path.exists(csv_path)
+    with open(csv_path, "a", newline="") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow([
+                "timestamp",
+                "tag",
+                "label_new",
+                "label_best",
+                "games",
+                "wins_new",
+                "wins_best",
+                "draws",
+                "winrate_new",
+                "winrate_best",
+                "draw_rate",
+            ])
+        writer.writerow([
+            datetime.datetime.now().isoformat(timespec="seconds"),
+            tag if tag is not None else "",
+            label_new,
+            label_best,
+            total,
+            wins_new,
+            wins_best,
+            draws,
+            f"{winrate_new:.6f}",
+            f"{winrate_best:.6f}",
+            f"{draw_rate:.6f}",
+        ])
+
+    # Colorful diagnostic printout
+    header = (
+        color("\n[HEAD-TO-HEAD] ", BOLD, CYAN)
+        + color(f"{label_new} vs {label_best}", BOLD, WHITE)
+    )
+    print(header)
+
+    print(
+        "  "
+        + color(f"{label_new} wins: ", DIM, WHITE)
+        + color(str(wins_new), BOLD, GREEN)
+        + color("  |  ", DIM, WHITE)
+        + color(f"{label_best} wins: ", DIM, WHITE)
+        + color(str(wins_best), BOLD, RED)
+        + color("  |  ", DIM, WHITE)
+        + color("Draws: ", DIM, WHITE)
+        + color(str(draws), BOLD, YELLOW)
+    )
+
+    print(
+        "  "
+        + color(f"Win rate {label_new}: {winrate_new:.3f}", BOLD, GREEN)
+        + color("   •   ", DIM, WHITE)
+        + color(f"{label_best}: {winrate_best:.3f}", BOLD, RED)
+        + color("   •   ", DIM, WHITE)
+        + color(f"Draw rate: {draw_rate:.3f}", BOLD, YELLOW)
+    )
+
+    return wins_new, wins_best, draws
 
 def evaluate_models(models, games_vs_prev=200, games_vs_random=400):
     """

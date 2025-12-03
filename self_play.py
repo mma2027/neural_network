@@ -16,7 +16,10 @@ def self_play(model1, model2,
               record_states=True,
               display=True,
               simulations=200,
-              record_policy=True):
+              record_policy=True,
+              use_dirichlet=False,
+              dirichlet_alpha=0.3,
+              dirichlet_eps=0.25):
     """
     Play a single self-play game between model1 (P1) and model2 (P2).
 
@@ -91,7 +94,10 @@ def self_play(model1, model2,
                 # Use MCTS with policy
                 col, pi = mcts_move_with_policy(
                     board, current_player, model,
-                    num_simulations=simulations
+                    num_simulations=simulations,
+                    dirichlet_noise=use_dirichlet,
+                    dirichlet_alpha=dirichlet_alpha,
+                    dirichlet_eps=dirichlet_eps
                 )
 
         # Record state BEFORE applying the move
@@ -112,7 +118,10 @@ def simulate(model1, model2,
              e1=0, e2=0,
              display=True,
              simulations=200,
-             record_policy=True):
+             record_policy=True,
+             use_dirichlet=False,
+             dirichlet_alpha=0.3,
+             dirichlet_eps=0.25):
     """
     Run multiple self-play games and aggregate states.
 
@@ -131,6 +140,9 @@ def simulate(model1, model2,
             display=display,
             simulations=simulations,
             record_policy=record_policy,
+            use_dirichlet=use_dirichlet,
+            dirichlet_alpha=dirichlet_alpha,
+            dirichlet_eps=dirichlet_eps
         )
 
         if states is not None:
