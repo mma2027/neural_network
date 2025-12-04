@@ -76,7 +76,7 @@ def get_ai_move(board, player, model: SimpleNN) -> int:
     """
     Use the trained model to pick the best move for `player`.
     """
-    col = predict_move(board, player, model)
+    col = predict_move(board, player, model, simulations=1600)
     return col
 
 

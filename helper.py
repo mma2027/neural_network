@@ -215,6 +215,7 @@ def _play_match(model1, model2, games, e1=0.0, e2=0.0):
             model2,
             e1=e1,
             e2=e2,
+            simulations=400,
             record_states=False,
             display=False,   # <- important: no printing during eval
         )

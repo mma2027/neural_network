@@ -87,17 +87,18 @@ model = SimpleNN(hidden=256)
 models = []
 
 
-iterations     = 10
-games_initial  = 200    # random warmup
-games_per_iter = 200    # self-play games per generation
+iterations     = 15
+games_initial  = 500    # random warmup
+games_per_iter = 500    # self-play games per generation
 
-train_epochs   = 3       # passes over buffer each gen
+train_epochs   = 4       # passes over buffer each gen
 train_lr       = 0.001   # smaller than 0.01 → more stable
 
 eps = 0
 eps_min = 0
 eps_decay = 0.95
 
+gated = False
 train_sims = 400
 warmup_iters = 5
 # Gating params: how we decide if a new model is better
@@ -160,7 +161,17 @@ for t in range(iterations):
         dirichlet_eps=0.10, 
     )
 
-    if t < warmup_iters:
+    if not gated:
+        accepted_name = f"gen_{t}"
+        print(color(
+            f"  [NO GATING] Auto-accept candidate as new best ({accepted_name}). "
+            f"(winrate_new={(w_new + 0.5 * d) / (w_new + w_best + d):.3f})",
+            BOLD, GREEN
+        ))
+        model = candidate
+        best_model_name = accepted_name
+
+    elif t < warmup_iters:
         accepted_name = f"gen_{t}"
         print(color(
             f"  [WARMUP] Auto-accept candidate as new best ({accepted_name}).",
@@ -168,10 +179,10 @@ for t in range(iterations):
         ))
         model = candidate
         best_model_name = accepted_name
-    elif w_new / (w_new + w_best + d) >= gating_threshold:
+    elif (w_new + 0.5 * d) / (w_new + w_best + d) >= gating_threshold:
         accepted_name = f"gen_{t}"
         print(color(
-            f"  Candidate PASSES gating (winrate={w_new / (w_new + w_best + d):.3f} ≥ {gating_threshold:.2f}) "
+            f"  Candidate PASSES gating (winrate={(w_new + 0.5 * d) / (w_new + w_best + d):.3f} ≥ {gating_threshold:.2f}) "
             f"→ new best model ({accepted_name}).",
             BOLD, GREEN
         ))
@@ -179,7 +190,7 @@ for t in range(iterations):
         best_model_name = accepted_name
     else:
         print(color(
-            f"  Candidate FAILS gating (winrate={w_new / (w_new + w_best + d):.3f} < {gating_threshold:.2f}) "
+            f"  Candidate FAILS gating (winrate={(w_new + 0.5 * d) / (w_new + w_best + d):.3f} < {gating_threshold:.2f}) "
             f"→ keeping current best ({best_model_name}).",
             BOLD, RED
         ))
