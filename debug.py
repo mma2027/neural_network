@@ -29,12 +29,12 @@ BOARD_STRING = (
     "......./"
     "......./"
     "......./"
-    "...2.../"
-    "...2.../"
-    "...2..."
+    "......./"
+    "......./"
+    "......."
 )
 
-NUM_SIMULATIONS = 200
+NUM_SIMULATIONS = 3200
 CPUCT = 1.4
 USE_DIRICHLET = False
 DIR_ALPHA = 0.3

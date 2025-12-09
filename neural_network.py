@@ -82,7 +82,7 @@ class SimpleNN:
         return v
 
     def backward_az(self, y_value, pi_target, lr=0.01,
-                    value_weight=1.0, policy_weight=1.0):
+                    value_weight=2.0, policy_weight=1.0):
         """
         Backprop for AlphaZero-style loss on a *single* example:
 

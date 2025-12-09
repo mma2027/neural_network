@@ -79,7 +79,7 @@ def train_on_buffer_az(model, buffer, epochs=4, lr=0.005,
             )
 
 REPLAY_PATH = "replay_buffer_az.pkl.gz"
-MAX_BUFFER_SIZE = 100000
+MAX_BUFFER_SIZE = 300000
 
 os.makedirs("csv", exist_ok=True)
 best_model_name = "gen_0"
@@ -99,7 +99,7 @@ eps_min = 0
 eps_decay = 0.95
 
 gated = False
-train_sims = 400
+train_sims = 200
 warmup_iters = 5
 # Gating params: how we decide if a new model is better
 gating_games = 100        # number of head-to-head games per iteration

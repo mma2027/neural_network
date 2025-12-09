@@ -105,7 +105,14 @@ def self_play(model1, model2,
             # deep copy board
             board_copy = [row[:] for row in board]
             ai_states.append((board_copy, current_player, pi))
+            flipped_board = [row[::-1] for row in board_copy]
 
+            # Flip policy (length 7): pi[c] goes to pi_flipped[6 - c]
+            pi_flipped = [0]*7
+            for c in range(7):
+                pi_flipped[6 - c] = pi[c]
+
+            ai_states.append((flipped_board, current_player, pi_flipped))
         # Apply move
         drop_piece(board, col, current_player)
 
