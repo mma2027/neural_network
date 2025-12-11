@@ -87,7 +87,7 @@ model = SimpleNN(hidden=256)
 models = []
 
 
-iterations     = 15
+iterations     = 25
 games_initial  = 500    # random warmup
 games_per_iter = 500    # self-play games per generation
 
@@ -99,7 +99,7 @@ eps_min = 0
 eps_decay = 0.95
 
 gated = False
-train_sims = 200
+train_sims = 300
 warmup_iters = 3
 # Gating params: how we decide if a new model is better
 gating_games = 100        # number of head-to-head games per iteration
